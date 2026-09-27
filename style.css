@@ -1,0 +1,34 @@
+*{box-sizing:border-box}
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
+body{margin:0;background:#0d1017;color:#edf0f6}
+button,.button,select,input{font:inherit}
+button,.button{border:1px solid #303747;background:#181d27;color:#edf0f6;border-radius:9px;padding:9px 13px;cursor:pointer}
+button:hover,.button:hover{background:#202735}
+button.primary{background:#5865f2;border-color:#5865f2}
+button.primary:hover{background:#6975ff}
+.topbar{position:sticky;top:0;z-index:10;background:#0d1017ee;backdrop-filter:blur(12px);border-bottom:1px solid #242a35;padding:18px 4%;display:flex;justify-content:space-between;gap:20px;align-items:center}
+h1{margin:0;font-size:24px}h1 a{color:inherit;text-decoration:none}h1 a:focus-visible{outline:2px solid #8fa7ff;outline-offset:4px}.muted{color:#8e98aa;margin:5px 0 0}.top-actions,.row{display:flex;gap:9px;align-items:center}
+main{width:min(1500px,92%);margin:24px auto 60px}.card{background:#121721;border:1px solid #252c39;border-radius:14px;padding:16px}
+.wrap{flex-wrap:wrap}.toolbar label{display:flex;gap:7px;align-items:center;color:#aeb7c7}.search-control{position:relative;display:inline-block}.autocomplete-list{position:absolute;top:calc(100% + 5px);left:0;z-index:20;width:100%;max-height:280px;overflow:auto;padding:4px;background:#121721;border:1px solid #343d4d;border-radius:8px;box-shadow:0 10px 24px #0008}.autocomplete-option{display:block;width:100%;padding:8px 9px;border:0;border-radius:5px;background:transparent;text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.autocomplete-option:hover,.autocomplete-option[aria-selected=true]{background:#202735}
+select,input[type=search]{background:#0b0f16;color:#edf0f6;border:1px solid #303747;border-radius:8px;padding:8px 10px;outline:none}
+input[type=search]{width:230px}.check{cursor:pointer}.check input{accent-color:#5865f2}
+.season-nav{display:flex;align-items:center;justify-content:center;gap:16px;margin:0 0 15px}
+.season-nav strong{min-width:190px;text-align:center;font-size:18px}
+.season-nav button{width:40px;height:40px;padding:0;font-size:28px;line-height:1}
+.sort-toolbar{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin:14px 0;color:#9da7b7;font-size:13px}
+.sort-button{padding:7px 11px}.sort-button.active{background:#344154;border-color:#68788f;color:#fff}
+.stats{margin-top:14px;color:#8f99aa;font-size:13px}.stats b{color:#e8ebf2}
+.tabs{display:flex;gap:4px;margin:22px 0 15px}.tab{border:0;background:transparent;color:#8f99aa}.tab.active{background:#202735;color:#fff}
+.status{min-height:25px;color:#8f99aa;margin:8px 2px 12px}.status.error{color:#ff7c8d}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px}
+.anime{display:flex;flex-direction:column;background:#121721;border:1px solid #252c39;border-radius:13px;overflow:hidden;position:relative;transition:.15s transform,.15s border-color}
+.anime:hover{transform:translateY(-2px);border-color:#465064}
+.poster{width:100%;aspect-ratio:2/3;object-fit:cover;background:#181d27;display:block;cursor:pointer}
+.card-body{display:flex;flex:1;flex-direction:column;padding:11px}.title{font-weight:700;line-height:1.25;min-height:2.5em;cursor:pointer}.sub{color:#8f99aa;font-size:12px;margin-top:6px}
+.badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.badge{font-size:11px;padding:3px 6px;border-radius:6px;background:#202735;color:#b9c1d0}
+.controls{display:flex;gap:5px;margin-top:auto;padding-top:11px}.iconbtn{flex:1;min-width:0;padding:7px 3px;font-size:12px}.dislike-icon{display:inline-block;width:14px;height:14px;vertical-align:-2px;flex:none}.badge .dislike-icon{margin-right:3px}.watched.on{background:#214d3d;border-color:#34785d}.fav.on{background:#514522;border-color:#b28b36;color:#ffe27b}.like.on{background:#513143;border-color:#9d4f72;color:#ff9bc4}.dislike.on{background:#343b46;border-color:#687589;color:#e2e7ef}.watchlist.on{background:#514522;border-color:#927b32;color:#f5dc83}
+.star{color:#f1c75b}.years{display:grid;gap:14px}.year-block{background:#121721;border:1px solid #252c39;border-radius:14px;padding:16px}.year-title{font-size:20px;font-weight:800;margin-bottom:12px}.season-row{display:grid;grid-template-columns:90px 1fr auto;gap:12px;align-items:center;padding:9px 0;border-top:1px solid #222936}.season-row:first-of-type{border-top:0}.bar{height:8px;background:#202735;border-radius:8px;overflow:hidden}.bar i{display:block;height:100%;background:#5865f2}
+.empty{padding:35px;text-align:center;color:#7f899b;border:1px dashed #303747;border-radius:12px}
+.year-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:13px}.view-heading{display:flex;align-items:baseline;gap:12px;margin:0 0 15px}.view-heading h2{margin:0;font-size:20px}
+.modal{position:fixed;inset:0;z-index:50}.modal-backdrop{position:absolute;inset:0;background:#000b}.modal-card{position:relative;width:min(850px,92%);max-height:88vh;overflow:auto;margin:6vh auto;background:#121721;border:1px solid #343d4d;border-radius:16px;padding:22px}.close{position:absolute;right:12px;top:10px;border:0;background:transparent;font-size:28px}.detail{display:grid;grid-template-columns:220px 1fr;gap:22px}.detail img{width:100%;border-radius:10px}.detail h2{margin:0 35px 8px 0}.detail p{color:#b5bdca;line-height:1.55}.links{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+@media(max-width:700px){.topbar{align-items:flex-start;flex-direction:column}.top-actions{width:100%;flex-wrap:wrap}.detail{grid-template-columns:1fr}.detail img{max-width:220px}.grid{grid-template-columns:repeat(auto-fill,minmax(145px,1fr))}.sort-toolbar{gap:5px}.sort-toolbar>span{width:100%}.season-nav{margin-top:4px}}

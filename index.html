@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Anime History — local</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <h1><a href="index.html" aria-label="Accueil Anime History">Anime History</a></h1>
+    <p class="muted">Historique personnel des saisons anime — données locales</p>
+  </div>
+  <div class="top-actions">
+    <button id="refreshBtn" class="primary">Actualiser cette saison</button>
+    <button id="refreshAllBtn">Initialiser / actualiser toutes les saisons</button>
+    <button id="cancelBulkBtn" hidden>Arrêter</button>
+    <button id="exportBtn">Exporter</button>
+    <label class="button">Importer une sauvegarde <input id="importFile" type="file" accept=".json" hidden></label>
+  </div>
+</header>
+
+<main>
+  <nav class="season-nav" aria-label="Navigation entre les saisons">
+    <button id="previousSeason" aria-label="Saison précédente" title="Saison précédente">‹</button>
+    <strong id="seasonHeading">Saison</strong>
+    <button id="nextSeason" aria-label="Saison suivante" title="Saison suivante">›</button>
+  </nav>
+  <section class="toolbar card">
+    <div class="row wrap">
+      <label>Année <select id="yearSelect"></select></label>
+      <label>Saison <select id="seasonSelect"></select></label>
+      <label>Recherche <span class="search-control"><input id="searchInput" type="search" placeholder="Titre…" autocomplete="off" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="titleSuggestions" aria-expanded="false"><span id="titleSuggestions" class="autocomplete-list" role="listbox" hidden></span></span></label>
+      <label class="check"><input id="onlyWatched" type="checkbox"> vus</label>
+      <label class="check"><input id="onlyFav" type="checkbox"> favoris ★</label>
+      <label class="check"><input id="onlyLiked" type="checkbox"> likes ♥</label>
+      <label class="check"><input id="onlyDisliked" type="checkbox"> dislikes 👎</label>
+      <label class="check"><input id="onlyWatchlist" type="checkbox"> à voir</label>
+    </div>
+    <div class="row stats" id="seasonStats"></div>
+  </section>
+
+  <section class="sort-toolbar" aria-label="Ordre d'affichage">
+    <span>Trier :</span>
+    <button class="sort-button active" data-sort="priority">Priorité</button>
+    <button class="sort-button" data-sort="score">Note</button>
+    <button class="sort-button" data-sort="popularity">Popularité</button>
+    <button class="sort-button" data-sort="title">Titre</button>
+  </section>
+
+  <section class="tabs">
+    <button class="tab active" data-view="season">Saison</button>
+    <button class="tab" data-view="years">Vue années</button>
+    <button class="tab" data-view="favorites">Mes favoris</button>
+    <button class="tab" data-view="browse">Parcourir</button>
+  </section>
+
+  <section id="seasonView">
+    <div id="status" class="status"></div>
+    <div id="grid" class="grid"></div>
+  </section>
+
+  <section id="yearsView" hidden>
+    <div id="years" class="years"></div>
+  </section>
+
+  <section id="favoritesView" hidden>
+    <div id="favGrid" class="grid"></div>
+  </section>
+
+  <section id="browseView" hidden>
+    <div class="view-heading"><h2>Parcourir</h2><span class="muted">Les filtres sélectionnés sont combinés en OU.</span></div>
+    <div id="browseGrid" class="grid"></div>
+  </section>
+</main>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <article class="modal-card">
+    <button class="close" id="closeModal">×</button>
+    <div id="modalContent"></div>
+  </article>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

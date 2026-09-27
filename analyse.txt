@@ -1,0 +1,1032 @@
+Oui. J'ai préparé une V1 fonctionnelle basée sur exactement cette architecture :
+
+Jikan → uniquement pour synchroniser
+IndexedDB → base locale des anime/saisons
+IndexedDB séparé → tes données personnelles
+Images → uniquement les URLs pour garder la BDD légère
+Export/import JSON pour sauvegarder toute ta base
+navigation année → saison
+recherche locale
+✓ Vu
+♥ Favori
+fiche détaillée
+vue par années
+vue Mes favoris
+pagination Jikan lors du refresh
+
+J'ai également prévu la récupération paginée des saisons, puisque l'API saisonnière de Jikan est paginée. Les données enregistrées comprennent notamment score, rang, popularité, studios, genres, synopsis, images, etc., que Jikan expose dans son modèle anime.
+
+Télécharger
+
+Télécharger Anime History V1 (.zip)
+
+Décompresse simplement le ZIP puis :
+
+anime-history-v1/
+├── index.html
+├── app.js
+├── style.css
+└── README.txt
+
+et double-clique sur index.html pour l'ouvrir dans Chrome.
+
+Première utilisation
+Ouvre index.html.
+Choisis par exemple 2026 → Été.
+Clique Actualiser Jikan.
+Les anime sont récupérés puis enregistrés dans IndexedDB.
+Ensuite, les changements Vu/Favori ne touchent jamais Jikan.
+Les consultations utilisent la BDD locale.
+
+Le bouton Actualiser Jikan est donc volontairement la seule partie qui dépend du réseau pour les données.
+
+Un choix important pour les images
+
+Pour cette V1, je stocke :
+
+MAL ID
+titre
+score
+synopsis
+...
+URL thumbnail
+
+plutôt que les images elles-mêmes.
+
+C'est beaucoup plus léger. En revanche, les images restent servies depuis leur URL distante : si tu veux une vraie utilisation offline, il faudra faire une V2 avec un cache des thumbnails en Blob dans IndexedDB.
+
+Je pense d'ailleurs que c'est la bonne prochaine évolution : un bouton "Synchroniser" qui récupère les données + met en cache les images, puis le site pourrait fonctionner pratiquement entièrement sans Internet entre deux synchronisations.
+
+Et pour la suite, je garderais bien séparés :
+
+DATABASE MAL/JIKAN
+├── anime
+├── seasons
+└── metadata
+
+USER DATABASE
+├── watched
+├── favorites
+├── personal ranking
+├── notes
+├── custom tags
+└── éventuellement score personnel
+
+Ça permettra d'ajouter ensuite ton classement 1er/2e/3e de chaque saison, des statistiques annuelles, une timeline et éventuellement des graphiques sans jamais modifier les données récupérées de Jikan. 
+
+Échec de l’actualisation Jikan : HTTP 504 en clickant desus
+
+Oui, j'ai identifié un problème dans ma V1 : l'endpoint Jikan que j'avais utilisé était incorrect.
+
+J'avais mis :
+
+/v4/anime/season/2026/summer
+
+alors que l'endpoint saisonnier Jikan v4 est :
+
+/v4/seasons/2026/summer
+
+La documentation/les clients Jikan utilisent bien cette forme /seasons/{year}/{season}.
+
+Il y a également un deuxième point : Jikan connaît actuellement des problèmes de 504 côté serveur, avec des signalements récents de 504 sur des requêtes qui doivent récupérer les données auprès de MAL.
+
+J'ai donc corrigé la V1 avec :
+
+✅ endpoint correct /seasons/...
+✅ retry automatique en cas de 429
+✅ retry automatique en cas de 500 / 502 / 503 / 504
+✅ backoff progressif entre les tentatives
+✅ pagination basée sur has_next_page
+✅ message d'erreur plus explicite
+✅ aucun impact sur ta BDD locale
+Nouvelle version
+
+Télécharger Anime History V1.1 corrigée (.zip)
+
+Remplace simplement l'ancien dossier par celui-ci.
+
+À noter : si tu obtiens encore un 504 avec cette version, ce ne sera probablement plus un problème de notre code : ce sera Jikan qui n'arrive pas à récupérer les données de MAL. Le retry permettra simplement de récupérer automatiquement la réponse si c'est temporaire.
+
+Et cette situation renforce justement ton choix initial : Jikan ne doit être qu'une couche de synchronisation, tandis que toute ton utilisation quotidienne doit rester locale. 
+
+j'ai ça :
+Échec de l’actualisation Jikan : HTTP 504 — {"status":504,"type":"BadResponseException","message":"Jikan failed to connect to MyAnimeList. MyAnimeList may be down\/unavailable or refuses to connect","error":null}. Si le 504 persiste, Jikan peut être temporairement indisponible ; réessaie plus tard.
+
+meme ne resseyant plus atrd
+
+corrige et fais une doc readme quiu explique en detail l'objectif du projet et la solution choisie avec lexplication des fonctionnalitées implémentée. 
+Double check que tout doit foncitonner et envoie moi une version propre 
+
+It seems like I can’t do more advanced data analysis right now. Please try again later. 
+
+from pathlib import Path
+import zipfile, textwrap, shutil, json, re
+
+root = Path("/mnt/data/anime-history-v1.2")
+if root.exists():
+    shutil.rmtree(root)
+root.mkdir()
+
+index = r"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Anime History — local</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <div>
+    <h1>Anime History</h1>
+    <p class="muted">Historique personnel des saisons anime · données locales</p>
+  </div>
+  <div class="top-actions">
+    <button id="refreshBtn" class="primary">↻ Actualiser Jikan</button>
+    <button id="testBtn">Tester Jikan</button>
+    <button id="exportBtn">Exporter</button>
+    <label class="button">Importer <input id="importFile" type="file" accept=".json" hidden></label>
+  </div>
+</header>
+
+<main>
+  <section class="toolbar card">
+    <div class="row wrap">
+      <label>Année <select id="yearSelect"></select></label>
+      <label>Saison <select id="seasonSelect"></select></label>
+      <label>Recherche <input id="searchInput" type="search" placeholder="Titre…"></label>
+      <label class="check"><input id="onlyWatched" type="checkbox"> vus uniquement</label>
+      <label class="check"><input id="onlyFav" type="checkbox"> favoris uniquement</label>
+    </div>
+    <div class="row stats" id="seasonStats"></div>
+  </section>
+
+  <section class="tabs">
+    <button class="tab active" data-view="season">Saison</button>
+    <button class="tab" data-view="years">Vue années</button>
+    <button class="tab" data-view="favorites">Mes favoris</button>
+  </section>
+
+  <section id="seasonView">
+    <div id="status" class="status"></div>
+    <div id="grid" class="grid"></div>
+  </section>
+
+  <section id="yearsView" hidden>
+    <div id="years" class="years"></div>
+  </section>
+
+  <section id="favoritesView" hidden>
+    <div id="favGrid" class="grid"></div>
+  </section>
+</main>
+
+<div id="modal" class="modal" hidden>
+  <div class="modal-backdrop"></div>
+  <article class="modal-card">
+    <button class="close" id="closeModal">×</button>
+    <div id="modalContent"></div>
+  </article>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>
+"""
+
+style = r"""*{box-sizing:border-box}
+:root{color-scheme:dark;font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif}
+body{margin:0;background:#0d1017;color:#edf0f6}
+button,.button,select,input{font:inherit}
+button,.button{border:1px solid #303747;background:#181d27;color:#edf0f6;border-radius:9px;padding:9px 13px;cursor:pointer}
+button:hover,.button:hover{background:#202735}
+button.primary{background:#5865f2;border-color:#5865f2}
+button.primary:hover{background:#6975ff}
+button:disabled{opacity:.55;cursor:wait}
+.topbar{position:sticky;top:0;z-index:10;background:#0d1017ee;backdrop-filter:blur(12px);border-bottom:1px solid #242a35;padding:18px 4%;display:flex;justify-content:space-between;gap:20px;align-items:center}
+h1{margin:0;font-size:24px}.muted{color:#8e98aa;margin:5px 0 0}.top-actions,.row{display:flex;gap:9px;align-items:center}
+main{width:min(1500px,92%);margin:24px auto 60px}.card{background:#121721;border:1px solid #252c39;border-radius:14px;padding:16px}
+.wrap{flex-wrap:wrap}.toolbar label{display:flex;gap:7px;align-items:center;color:#aeb7c7}
+select,input[type=search]{background:#0b0f16;color:#edf0f6;border:1px solid #303747;border-radius:8px;padding:8px 10px;outline:none}
+input[type=search]{width:230px}.check{cursor:pointer}.check input{accent-color:#5865f2}
+.stats{margin-top:14px;color:#8f99aa;font-size:13px}.stats b{color:#e8ebf2}
+.tabs{display:flex;gap:4px;margin:22px 0 15px}.tab{border:0;background:transparent;color:#8f99aa}.tab.active{background:#202735;color:#fff}
+.status{min-height:25px;color:#8f99aa;margin:8px 2px 12px;line-height:1.5}.status.ok{color:#77d7a4}.status.error{color:#ff7c8d}.status.warn{color:#f0c66b}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px}
+.anime{background:#121721;border:1px solid #252c39;border-radius:13px;overflow:hidden;position:relative;transition:.15s transform,.15s border-color}
+.anime:hover{transform:translateY(-2px);border-color:#465064}
+.poster{width:100%;aspect-ratio:2/3;object-fit:cover;background:#181d27;display:block;cursor:pointer}
+.card-body{padding:11px}.title{font-weight:700;line-height:1.25;min-height:2.5em;cursor:pointer}.sub{color:#8f99aa;font-size:12px;margin-top:6px}
+.badges{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}.badge{font-size:11px;padding:3px 6px;border-radius:6px;background:#202735;color:#b9c1d0}
+.controls{display:flex;gap:6px;margin-top:11px}.iconbtn{flex:1;padding:7px}.watched.on{background:#214d3d;border-color:#34785d}.fav.on{background:#513143;border-color:#9d4f72;color:#ff9bc4}
+.star{color:#f1c75b}.years{display:grid;gap:14px}.year-block{background:#121721;border:1px solid #252c39;border-radius:14px;padding:16px}.year-title{font-size:20px;font-weight:800;margin-bottom:12px}.season-row{display:grid;grid-template-columns:90px 1fr auto;gap:12px;align-items:center;padding:9px 0;border-top:1px solid #222936}.season-row:first-of-type{border-top:0}.bar{height:8px;background:#202735;border-radius:8px;overflow:hidden}.bar i{display:block;height:100%;background:#5865f2}
+.empty{padding:35px;text-align:center;color:#7f899b;border:1px dashed #303747;border-radius:12px}
+.modal{position:fixed;inset:0;z-index:50}.modal-backdrop{position:absolute;inset:0;background:#000b}.modal-card{position:relative;width:min(850px,92%);max-height:88vh;overflow:auto;margin:6vh auto;background:#121721;border:1px solid #343d4d;border-radius:16px;padding:22px}.close{position:absolute;right:12px;top:10px;border:0;background:transparent;font-size:28px}.detail{display:grid;grid-template-columns:220px 1fr;gap:22px}.detail img{width:100%;border-radius:10px}.detail h2{margin:0 35px 8px 0}.detail p{color:#b5bdca;line-height:1.55}.links{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+@media(max-width:700px){.topbar{align-items:flex-start;flex-direction:column}.top-actions{width:100%;flex-wrap:wrap}.detail{grid-template-columns:1fr}.detail img{max-width:220px}.grid{grid-template-columns:repeat(auto-fill,minmax(145px,1fr))}}
+"""
+
+app = r"""const API_BASE = "https://api.jikan.moe/v4";
+const API_SEASON = `${API_BASE}/seasons`;
+const DB_NAME="AnimeHistoryDB", DB_VERSION=2;
+const seasons=["winter","spring","summer","fall"];
+const seasonNames={winter:"Hiver",spring:"Printemps",summer:"Été",fall:"Automne"};
+
+let db;
+let state={year:new Date().getFullYear(),season:"summer",view:"season",anime:[]};
+
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));
+const seasonKey=(y,s)=>`${y}-${s}`;
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+
+function openDB(){
+  return new Promise((resolve,reject)=>{
+    const r=indexedDB.open(DB_NAME,DB_VERSION);
+    r.onupgradeneeded=()=>{
+      const d=r.result;
+      if(!d.objectStoreNames.contains("anime"))d.createObjectStore("anime",{keyPath:"mal_id"});
+      if(!d.objectStoreNames.contains("seasons"))d.createObjectStore("seasons",{keyPath:"key"});
+      if(!d.objectStoreNames.contains("user"))d.createObjectStore("user",{keyPath:"mal_id"});
+      if(!d.objectStoreNames.contains("meta"))d.createObjectStore("meta",{keyPath:"key"});
+    };
+    r.onsuccess=()=>{db=r.result;resolve(db)};
+    r.onerror=()=>reject(r.error);
+  });
+}
+function store(name,mode="readonly"){return db.transaction(name,mode).objectStore(name)}
+function put(name,v){return new Promise((res,rej)=>{const r=store(name,"readwrite").put(v);r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
+function get(name,k){return new Promise((res,rej)=>{const r=store(name).get(k);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+function all(name){return new Promise((res,rej)=>{const r=store(name).getAll();r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+function remove(name,k){return new Promise((res,rej)=>{const r=store(name,"readwrite").delete(k);r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
+
+async function fetchJSON(url, attempts=4){
+  let lastError;
+  for(let attempt=1;attempt<=attempts;attempt++){
+    try{
+      const response=await fetch(url,{cache:"no-store"});
+      const text=await response.text();
+      let body=null;
+      try{body=text?JSON.parse(text):null}catch{}
+      if(response.ok)return body;
+      const serverMessage=body?.message?` — ${body.message}`:"";
+      const error=new Error(`HTTP ${response.status}${serverMessage}`);
+      error.status=response.status;
+      lastError=error;
+      if(![408,429,500,502,503,504].includes(response.status)||attempt===attempts)throw error;
+    }catch(error){
+      lastError=error;
+      if(attempt===attempts)throw error;
+    }
+    await sleep(1200*Math.pow(2,attempt-1)+Math.floor(Math.random()*500));
+  }
+  throw lastError||new Error("Erreur réseau");
+}
+
+function normalize(a){
+  return {
+    mal_id:a.mal_id,url:a.url||`https://myanimelist.net/anime/${a.mal_id}`,
+    title:a.title,title_english:a.title_english,title_japanese:a.title_japanese,
+    images:a.images?.jpg?.large_image_url||a.images?.jpg?.image_url||"",
+    type:a.type,source:a.source,episodes:a.episodes,status:a.status,airing:a.airing,
+    score:a.score,scored_by:a.scored_by,rank:a.rank,popularity:a.popularity,members:a.members,
+    favorites:a.favorites,synopsis:a.synopsis,background:a.background,premiered:a.premiered,
+    broadcast:a.broadcast?.string||"",duration:a.duration,rating:a.rating,
+    studios:(a.studios||[]).map(x=>x.name),genres:(a.genres||[]).map(x=>x.name),
+    aired_from:a.aired?.from||null,aired_to:a.aired?.to||null,
+    updatedAt:new Date().toISOString()
+  };
+}
+
+async function refreshSeason(year,season){
+  if($("#refreshBtn").disabled)return;
+  setStatus(`Test/synchronisation Jikan : ${year} ${seasonNames[season]}…`,"");
+  $("#refreshBtn").disabled=true; $("#testBtn").disabled=true;
+
+  const seasonId=seasonKey(year,season);
+  const previousLinks=(await all("seasons")).filter(x=>x.seasonKey===seasonId);
+  const newIds=[];
+
+  try{
+    // Important: use the canonical v4 seasonal endpoint without sfw=false.
+    // The public Jikan instance has had intermittent 504s when its MAL backend fails.
+    let page=1, hasNext=true, count=0;
+    while(hasNext){
+      setStatus(`Synchronisation Jikan : page ${page}… (${count} anime reçus)`);
+      const data=await fetchJSON(`${API_SEASON}/${year}/${season}?page=${page}&limit=25`);
+      const items=data?.data||[];
+      if(!items.length && page===1)throw new Error("Jikan a renvoyé une saison vide.");
+
+      for(const raw of items){
+        const anime=normalize(raw);
+        await put("anime",anime);
+        newIds.push(anime.mal_id);
+        count++;
+      }
+      hasNext=Boolean(data?.pagination?.has_next_page);
+      page++;
+      if(hasNext)await sleep(900);
+    }
+
+    // Replace the local membership of this season only after the complete
+    // download succeeded. A failed refresh therefore cannot corrupt the cache.
+    const keep=new Set(newIds);
+    for(const old of previousLinks){
+      if(!keep.has(old.mal_id))await remove("seasons",old.key);
+    }
+    for(const id of newIds){
+      await put("seasons",{key:`${seasonId}:${id}`,seasonKey:seasonId,year,season,mal_id:id});
+    }
+    await put("meta",{key:seasonId,lastRefresh:new Date().toISOString(),count});
+    setStatus(`✓ Synchronisation terminée : ${count} anime enregistrés localement.`,"ok");
+    await loadSeason();
+  }catch(e){
+    const hint=e.status===504
+      ?"Jikan renvoie actuellement un 504 : le serveur public n'arrive pas à joindre MyAnimeList. La BDD locale n'a pas été modifiée."
+      :"La synchronisation a échoué. La BDD locale précédente est conservée.";
+    setStatus(`Échec : ${e.message}. ${hint}`,"error");
+  }finally{
+    $("#refreshBtn").disabled=false; $("#testBtn").disabled=false;
+  }
+}
+
+async function testJikan(){
+  if($("#testBtn").disabled)return;
+  $("#testBtn").disabled=true;
+  setStatus("Test de connexion Jikan…");
+  try{
+    const data=await fetchJSON(`${API_SEASON}/2026/summer?page=1&limit=1`,2);
+    const count=data?.pagination?.items?.total??data?.data?.length??0;
+    setStatus(`✓ Jikan répond correctement. Endpoint saisonnel OK (${count} entrées annoncées pour 2026/été).`,"ok");
+  }catch(e){
+    setStatus(`✕ Jikan ne répond pas correctement : ${e.message}.`,"error");
+  }finally{$("#testBtn").disabled=false}
+}
+
+async function loadSeason(){
+  const rows=await all("seasons");
+  const ids=[...new Set(rows.filter(x=>x.seasonKey===seasonKey(state.year,state.season)).map(x=>x.mal_id))];
+  state.anime=[];
+  for(const id of ids){const a=await get("anime",id);if(a)state.anime.push(a)}
+  state.anime.sort((a,b)=>(a.rank||999999)-(b.rank||999999));
+  render();
+}
+
+async function userFor(id){return await get("user",id)||{mal_id:id,watched:false,favorite:false,personalRank:null,notes:""}}
+async function toggle(id,field){const u=await userFor(id);u[field]=!u[field];await put("user",u);render()}
+
+function filtered(){
+  const q=$("#searchInput").value.trim().toLowerCase();
+  return state.anime.filter(a=>!q||[a.title,a.title_english,a.title_japanese].filter(Boolean).some(x=>x.toLowerCase().includes(q)));
+}
+
+async function render(){
+  $("#yearSelect").value=state.year;$("#seasonSelect").value=state.season;
+  const list=filtered(),users=await all("user"),um=new Map(users.map(x=>[x.mal_id,x]));
+  const watched=list.filter(a=>um.get(a.mal_id)?.watched),fav=list.filter(a=>um.get(a.mal_id)?.favorite);
+  const shown=list.filter(a=>{const u=um.get(a.mal_id)||{};return(!$("#onlyWatched").checked||u.watched)&&(!$("#onlyFav").checked||u.favorite)});
+  $("#seasonStats").innerHTML=`<span><b>${state.anime.length}</b> anime</span><span><b>${watched.length}</b> vus</span><span><b>${fav.length}</b> favoris</span>`;
+  if(state.view==="season"){
+    await renderGrid($("#grid"),shown,um);
+    $("#seasonView").hidden=false;$("#yearsView").hidden=true;$("#favoritesView").hidden=true;
+  }else if(state.view==="years"){
+    await renderYears();
+    $("#seasonView").hidden=true;$("#yearsView").hidden=false;$("#favoritesView").hidden=true;
+  }else{
+    const fa=[];
+    for(const u of users.filter(x=>x.favorite)){const a=await get("anime",u.mal_id);if(a)fa.push(a)}
+    await renderGrid($("#favGrid"),fa,um);
+    $("#seasonView").hidden=true;$("#yearsView").hidden=true;$("#favoritesView").hidden=false;
+  }
+}
+
+async function renderGrid(el,list,um){
+  if(!list.length){el.innerHTML='<div class="empty">Aucun anime dans cette vue.</div>';return}
+  el.innerHTML="";
+  for(const a of list){
+    const u=um.get(a.mal_id)||{};
+    const d=document.createElement("article");d.className="anime";
+    d.innerHTML=`<img class="poster" src="${esc(a.images)}" alt="" loading="lazy">
+      <div class="card-body"><div class="title">${esc(a.title)}</div>
+      <div class="sub">${esc(a.type||"")} · ${a.episodes??"?"} ép. · <span class="star">★ ${a.score??"—"}</span></div>
+      <div class="badges">${u.watched?'<span class="badge">✓ Vu</span>':""}${u.favorite?'<span class="badge">♥ Favori</span>':""}</div>
+      <div class="controls"><button class="iconbtn watched ${u.watched?"on":""}">${u.watched?"✓ Vu":"☐ Vu"}</button><button class="iconbtn fav ${u.favorite?"on":""}">${u.favorite?"♥":"♡"}</button></div></div>`;
+    d.querySelector(".poster").onclick=()=>openDetail(a);
+    d.querySelector(".title").onclick=()=>openDetail(a);
+    d.querySelector(".watched").onclick=()=>toggle(a.mal_id,"watched");
+    d.querySelector(".fav").onclick=()=>toggle(a.mal_id,"favorite");
+    el.appendChild(d);
+  }
+}
+
+async function renderYears(){
+  const rows=await all("seasons"),users=await all("user"),um=new Map(users.map(x=>[x.mal_id,x]));
+  const years=[...new Set(rows.map(x=>x.year))].sort((a,b)=>b-a);
+  $("#years").innerHTML=years.length?years.map(y=>`<div class="year-block"><div class="year-title">${y}</div>${seasons.map(s=>{
+    const ids=[...new Set(rows.filter(x=>x.year===y&&x.season===s).map(x=>x.mal_id))];
+    const w=ids.filter(id=>um.get(id)?.watched).length,f=ids.filter(id=>um.get(id)?.favorite).length,p=ids.length?Math.round(w/ids.length*100):0;
+    return `<div class="season-row"><b>${seasonNames[s]}</b><div><div class="bar"><i style="width:${p}%"></i></div><small>${w}/${ids.length} vus</small></div><span>♥ ${f}</span></div>`;
+  }).join("")}</div>`).join(""):'<div class="empty">Aucune saison locale. Utilise « Actualiser Jikan ».</div>';
+}
+
+function openDetail(a){
+  $("#modalContent").innerHTML=`<div class="detail"><img src="${esc(a.images)}"><div>
+  <h2>${esc(a.title)}</h2><div class="sub">${esc(a.title_english||"")} ${a.score?`· ★ ${a.score} (${a.scored_by||0})`:""}</div>
+  <p>${esc(a.synopsis||"Synopsis indisponible.")}</p>
+  <div class="badges">${[a.type,a.status,a.episodes?`${a.episodes} épisodes`:null,a.premiered,...a.genres].filter(Boolean).map(x=>`<span class="badge">${esc(x)}</span>`).join("")}</div>
+  <p class="sub">Studios : ${esc((a.studios||[]).join(", ")||"—")}<br>Diffusion : ${esc(a.broadcast||"—")}</p>
+  <div class="links"><button id="mdWatched">✓ Vu</button><button id="mdFav">♥ Favori</button><a class="button" href="${esc(a.url)}" target="_blank" rel="noopener">Ouvrir MAL</a></div>
+  </div></div>`;
+  $("#modal").hidden=false;
+  $("#mdWatched").onclick=()=>toggle(a.mal_id,"watched");
+  $("#mdFav").onclick=()=>toggle(a.mal_id,"favorite");
+}
+
+async function exportData(){
+  const payload={format:"anime-history",version:2,exportedAt:new Date().toISOString(),
+    anime:await all("anime"),seasons:await all("seasons"),user:await all("user"),meta:await all("meta")};
+  const blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=`anime-history-${new Date().toISOString().slice(0,10)}.json`;a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+}
+
+async function importData(file){
+  const p=JSON.parse(await file.text());
+  if(p?.format!=="anime-history"||!Array.isArray(p.anime)||!Array.isArray(p.seasons)||!Array.isArray(p.user))throw Error("Fichier Anime History invalide.");
+  for(const a of p.anime)await put("anime",a);
+  for(const x of p.seasons)await put("seasons",x);
+  for(const u of p.user)await put("user",u);
+  for(const m of (p.meta||[]))await put("meta",m);
+  setStatus(`✓ Import terminé : ${p.anime.length} anime, ${p.seasons.length} associations de saisons, ${p.user.length} données utilisateur.`,"ok");
+  await loadSeason();
+}
+
+async function init(){
+  await openDB();
+  const years=[...new Set((await all("seasons")).map(x=>x.year))].sort((a,b)=>b-a);
+  const current=new Date().getFullYear();
+  const yearSet=[current,...years,...Array.from({length:15},(_,i)=>current-i)];
+  $("#yearSelect").innerHTML=[...new Set(yearSet)].sort((a,b)=>b-a).map(y=>`<option>${y}</option>`).join("");
+  $("#seasonSelect").innerHTML=seasons.map(s=>`<option value="${s}">${seasonNames[s]}</option>`).join("");
+  $("#yearSelect").value=state.year;$("#seasonSelect").value=state.season;
+  $("#yearSelect").onchange=async e=>{state.year=+e.target.value;await loadSeason()};
+  $("#seasonSelect").onchange=async e=>{state.season=e.target.value;await loadSeason()};
+  $("#searchInput").oninput=render;$("#onlyWatched").onchange=render;$("#onlyFav").onchange=render;
+  $("#refreshBtn").onclick=()=>refreshSeason(state.year,state.season);
+  $("#testBtn").onclick=testJikan;
+  $("#exportBtn").onclick=exportData;
+  $("#importFile").onchange=e=>e.target.files[0]&&importData(e.target.files[0]).catch(x=>setStatus(`Import impossible : ${x.message}`,"error"));
+  document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.remove("active"));b.classList.add("active");state.view=b.dataset.view;render()});
+  $("#closeModal").onclick=()=>$("#modal").hidden=true;$("#modal .modal-backdrop").onclick=()=>$("#modal").hidden=true;
+  await loadSeason();
+  setStatus("Base locale prête. La synchronisation Jikan est optionnelle et n'est utilisée que sur demande.");
+}
+init().catch(e=>setStatus(`Erreur d'initialisation : ${e.message}`,"error"));
+"""
+
+readme = r"""# Anime History — V1.2
+
+## 1. Objectif du projet
+
+Anime History est une petite application personnelle, locale et orientée « historique anime ».
+
+L'idée est de conserver une copie locale des informations publiques de MyAnimeList organisées par :
+
+- année ;
+- saison : Winter / Spring / Summer / Fall ;
+- anime appartenant à chaque saison.
+
+La source distante n'est PAS utilisée pour le fonctionnement quotidien du site.
+
+Le principe est :
+
+    MyAnimeList
+         ↑
+      Jikan
+         ↑
+    synchronisation
+         │
+         ▼
+    IndexedDB locale
+         │
+         ├── données anime
+         ├── appartenance aux saisons
+         └── métadonnées de synchronisation
+
+    Données personnelles
+         │
+         ├── vu / non vu
+         ├── favori / non favori
+         ├── classement personnel (prévu)
+         └── notes / tags personnels (prévu)
+
+Le projet ne cherche donc pas à remplacer MyAnimeList en ligne.
+Il sert plutôt de « mémoire personnelle » permettant de revoir l'histoire de ses anime saison par saison.
+
+---
+
+## 2. Pourquoi Jikan ?
+
+Jikan est une API REST open-source non officielle qui expose des données publiques de MyAnimeList.
+
+Le projet utilise Jikan uniquement comme couche de synchronisation.
+
+Jikan n'est jamais considéré comme la base de données de l'application.
+
+C'est important pour la stabilité :
+
+- si Jikan est indisponible, le site continue à fonctionner avec les données déjà synchronisées ;
+- les clics « Vu » et « Favori » ne dépendent pas du réseau ;
+- les recherches ne dépendent pas du réseau ;
+- les vues par année ne dépendent pas du réseau ;
+- les données utilisateur ne sont jamais envoyées à Jikan.
+
+Documentation Jikan :
+https://docs.jikan.moe/
+
+Projet Jikan REST :
+https://github.com/jikan-me/jikan-rest
+
+---
+
+## 3. Pourquoi IndexedDB ?
+
+Le navigateur dispose de plusieurs mécanismes de stockage.
+
+localStorage est pratique mais limité et peu adapté à une véritable base de données.
+
+IndexedDB est donc utilisé comme base locale.
+
+Stores utilisés :
+
+### `anime`
+
+Une entrée par MAL ID.
+
+Exemples de données :
+
+- MAL ID
+- titre
+- titre anglais
+- titre japonais
+- URL MAL
+- URL de thumbnail
+- type
+- nombre d'épisodes
+- statut
+- score MAL
+- nombre de votes
+- rang
+- popularité
+- membres
+- favoris MAL
+- synopsis
+- studios
+- genres
+- diffusion
+- dates de diffusion
+- etc.
+
+### `seasons`
+
+Association entre un anime et une saison.
+
+Exemple :
+
+    2026-summer -> MAL ID 59193
+
+### `user`
+
+Données strictement personnelles.
+
+Exemple :
+
+    {
+      "mal_id": 59193,
+      "watched": true,
+      "favorite": true,
+      "personalRank": null,
+      "notes": ""
+    }
+
+Ces informations sont indépendantes des données Jikan.
+
+### `meta`
+
+Informations de synchronisation :
+
+- dernière actualisation d'une saison ;
+- nombre d'anime récupérés ;
+- etc.
+
+---
+
+## 4. Images
+
+La V1 ne télécharge pas les images.
+
+Elle conserve uniquement leur URL CDN :
+
+    https://cdn.myanimelist.net/...
+
+Avantages :
+
+- base IndexedDB minuscule ;
+- synchronisation rapide ;
+- pas de duplication des centaines d'images ;
+- pas besoin de gérer les fichiers image.
+
+Inconvénient :
+
+les thumbnails nécessitent encore une connexion Internet si Chrome ne les possède pas déjà dans son cache.
+
+Une future V2 pourra éventuellement proposer un cache d'images local en Blob dans IndexedDB pour obtenir un vrai mode offline.
+
+---
+
+## 5. Fonctionnalités actuellement implémentées
+
+### Navigation par saison
+
+Sélection :
+
+- année ;
+- Winter ;
+- Spring ;
+- Summer ;
+- Fall.
+
+Les données affichées viennent de la BDD locale.
+
+### Synchronisation Jikan
+
+Le bouton :
+
+    ↻ Actualiser Jikan
+
+récupère la saison sélectionnée depuis Jikan.
+
+La pagination est traitée automatiquement.
+
+Les pages sont téléchargées séquentiellement avec un délai entre les requêtes afin de limiter les problèmes de rate limiting.
+
+### Protection de la BDD locale
+
+La saison locale n'est remplacée qu'après avoir téléchargé avec succès toutes les pages.
+
+Si Jikan tombe en erreur au milieu :
+
+- les anciennes données restent intactes ;
+- la saison locale n'est pas partiellement détruite ;
+- les données utilisateur ne sont jamais modifiées.
+
+### Retry automatique
+
+Les erreurs réseau / serveur suivantes sont retentées :
+
+- 408
+- 429
+- 500
+- 502
+- 503
+- 504
+
+Le délai augmente progressivement entre les tentatives.
+
+Cela permet de supporter les erreurs temporaires.
+
+Attention : un 504 permanent provenant de Jikan ne peut pas être « réparé » par JavaScript. Dans ce cas il faut attendre le rétablissement de Jikan ou utiliser une autre instance Jikan.
+
+### Test Jikan
+
+Le bouton :
+
+    Tester Jikan
+
+effectue une petite requête sur :
+
+    /v4/seasons/2026/summer?page=1&limit=1
+
+Il permet de savoir immédiatement si le service répond avant de lancer une synchronisation complète.
+
+### Vu
+
+Chaque anime possède un bouton :
+
+    ☐ Vu
+    ✓ Vu
+
+L'état est enregistré uniquement dans IndexedDB.
+
+### Favori
+
+Chaque anime possède :
+
+    ♡
+    ♥
+
+L'état est également purement local.
+
+### Recherche
+
+La recherche est locale.
+
+Elle peut rechercher dans :
+
+- titre ;
+- titre anglais ;
+- titre japonais.
+
+Aucune requête réseau n'est effectuée pendant la recherche.
+
+### Fiche anime
+
+Un clic sur une carte affiche :
+
+- image ;
+- titre ;
+- titre anglais ;
+- score MAL ;
+- synopsis ;
+- type ;
+- statut ;
+- nombre d'épisodes ;
+- genres ;
+- studios ;
+- diffusion ;
+- lien vers MAL.
+
+### Vue années
+
+Affiche toutes les années déjà présentes dans la base locale.
+
+Pour chaque année :
+
+- Winter ;
+- Spring ;
+- Summer ;
+- Fall ;
+- nombre d'anime ;
+- nombre vus ;
+- pourcentage vu ;
+- nombre de favoris.
+
+### Vue favoris
+
+Affiche tous les anime marqués favoris dans la BDD utilisateur.
+
+### Export JSON
+
+Le bouton Exporter sauvegarde :
+
+- données anime ;
+- associations saisonnières ;
+- données personnelles ;
+- métadonnées.
+
+Le fichier peut servir de backup.
+
+### Import JSON
+
+Un export peut être réimporté dans une autre installation du site.
+
+---
+
+## 6. Installation
+
+Aucune installation de Node.js, Python, PHP ou serveur n'est nécessaire pour cette V1.
+
+Décompresser le dossier puis ouvrir :
+
+    index.html
+
+dans Chrome.
+
+La base IndexedDB est créée automatiquement.
+
+---
+
+## 7. Première utilisation
+
+1. Ouvrir `index.html`.
+2. Choisir une année.
+3. Choisir une saison.
+4. Cliquer sur `Tester Jikan`.
+5. Si le test est OK, cliquer sur `Actualiser Jikan`.
+6. Attendre la fin de la synchronisation.
+7. Les données restent ensuite disponibles localement.
+
+Une fois une saison synchronisée, il n'est pas nécessaire de rappeler Jikan pour :
+
+- consulter les anime ;
+- rechercher ;
+- marquer comme vu ;
+- ajouter/enlever un favori ;
+- consulter la vue années ;
+- consulter les favoris.
+
+---
+
+## 8. Important : disponibilité de Jikan
+
+Jikan est un service tiers et n'est pas contrôlé par cette application.
+
+Jikan fonctionne en récupérant/parsing des données publiques de MyAnimeList.
+
+Il peut donc arriver que :
+
+    Jikan -> MyAnimeList
+
+échoue alors que :
+
+    Chrome -> MyAnimeList
+
+fonctionne parfaitement.
+
+Dans ce cas, l'application locale n'est pas en panne.
+
+Le bouton `Tester Jikan` permet de distinguer les deux situations.
+
+L'application est volontairement conçue pour que l'indisponibilité de Jikan ne détruise jamais la base locale.
+
+---
+
+## 9. Pourquoi ne pas récupérer directement MyAnimeList depuis le HTML ?
+
+Le projet évite volontairement de faire du scraping direct de MAL depuis le navigateur.
+
+Cela poserait notamment :
+
+- problèmes CORS ;
+- dépendance au HTML de MAL ;
+- changements de structure du site ;
+- gestion plus compliquée des erreurs ;
+- risque de casser l'application lorsque MAL modifie ses pages.
+
+Jikan fournit précisément une couche REST pour ce type d'accès.
+
+---
+
+## 10. Architecture
+
+Version actuelle :
+
+    Chrome
+      │
+      ├── HTML
+      ├── CSS
+      └── JavaScript
+             │
+             └── IndexedDB
+                    │
+                    ├── anime
+                    ├── seasons
+                    ├── user
+                    └── meta
+
+Synchronisation uniquement :
+
+    Chrome
+       │
+       ▼
+    Jikan REST API
+       │
+       ▼
+    MyAnimeList
+       │
+       ▼
+    Chrome
+       │
+       ▼
+    IndexedDB
+
+---
+
+## 11. Fonctionnalités prévues pour les prochaines versions
+
+La structure actuelle est volontairement préparée pour ajouter :
+
+### Classement personnel
+
+Par exemple :
+
+    Summer 2025
+
+    1. Anime A
+    2. Anime B
+    3. Anime C
+    ...
+
+Avec classement différent du rang MAL.
+
+### Score personnel
+
+Exemple :
+
+    MAL : 8.41
+    Moi : 9.2
+
+### Notes
+
+Notes libres associées à chaque anime.
+
+### Tags personnels
+
+Exemple :
+
+    romance
+    à revoir
+    chef-d'oeuvre
+    abandonné
+    film
+    préféré
+
+### Timeline annuelle
+
+Une représentation globale :
+
+    2018
+    2019
+    2020
+    2021
+    ...
+    2026
+
+avec les favoris et statistiques personnelles.
+
+### Statistiques
+
+Par exemple :
+
+- nombre d'anime vus par année ;
+- nombre de favoris par année ;
+- saisons les plus regardées ;
+- nombre total d'anime vus ;
+- moyenne de score personnel ;
+- comparaison score MAL / score personnel.
+
+### Cache offline des images
+
+Les thumbnails pourraient être téléchargées lors de la synchronisation puis conservées comme Blob dans IndexedDB.
+
+L'application deviendrait alors beaucoup plus proche d'une vraie application 100 % offline.
+
+---
+
+## 12. Sauvegarde recommandée
+
+Même si IndexedDB est persistante, il est recommandé d'utiliser régulièrement :
+
+    Exporter
+
+Le JSON exporté devient la sauvegarde complète de la base.
+
+Il peut être conservé ailleurs ou utilisé pour migrer vers une nouvelle version.
+
+---
+
+## 13. Limites de la V1
+
+La V1 ne fait pas encore :
+
+- authentification MyAnimeList ;
+- modification de la liste MAL ;
+- synchronisation de la liste « Watching / Completed » de MAL ;
+- classement personnel drag & drop ;
+- score personnel ;
+- notes ;
+- cache local des images ;
+- synchronisation automatique périodique.
+
+Ces fonctions peuvent être ajoutées sans remettre en cause l'architecture actuelle.
+
+---
+
+## 14. Philosophie du projet
+
+La règle principale est :
+
+    INTERNET = synchronisation
+    LOCAL    = utilisation quotidienne
+
+Jikan est donc une source de données et non une dépendance permanente.
+
+Les données personnelles appartiennent à l'utilisateur et restent locales.
+
+Le projet est destiné à devenir progressivement une archive personnelle de l'histoire anime, saison par saison et année par année.
+"""
+
+for name, content in {
+    "index.html":index, "style.css":style, "app.js":app, "README.md":readme
+}.items():
+    (root/name).write_text(content,encoding="utf-8")
+
+# Add a tiny version marker.
+(root/"VERSION.txt").write_text("Anime History V1.2\n",encoding="utf-8")
+
+zip_path=Path("/mnt/data/anime-history-v1.2-clean.zip")
+with zipfile.ZipFile(zip_path,"w",zipfile.ZIP_DEFLATED) as z:
+    for p in root.iterdir():
+        z.write(p,p.name)
+
+print(zip_path)
+print("Files:", [p.name for p in root.iterdir()])
